@@ -1,0 +1,95 @@
+version: "3.9"
+
+services:
+
+  # ── MongoDB ────────────────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7.0
+    container_name: ai_meeting_mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-secret}
+      MONGO_INITDB_DATABASE: ai_meeting_analyzer
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+      - ./backend/scripts/mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend (Flask) ────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ai_meeting_backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      MONGO_URI: mongodb://${MONGO_USER:-admin}:${MONGO_PASSWORD:-secret}@mongodb:27017/ai_meeting_analyzer?authSource=admin
+      FLASK_ENV: production
+    ports:
+      - "5000:5000"
+    volumes:
+      - uploads_data:/app/uploads
+      - backend_logs:/app/logs
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Frontend (React + Nginx) ───────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_API_URL: http://localhost/api
+    container_name: ai_meeting_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - app_net
+
+  # ── Nginx Reverse Proxy ────────────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: ai_meeting_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - app_net
+
+networks:
+  app_net:
+    driver: bridge
+
+volumes:
+  mongo_data:
+  uploads_data:
+  backend_logs:
