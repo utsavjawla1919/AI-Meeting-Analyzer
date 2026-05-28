@@ -1,160 +1,322 @@
 /**
- * services/api.js — Axios instance + all API call functions.
- * JWT token is injected into every request via an interceptor.
- * 401 responses auto-refresh the access token once, then redirect to login.
+ * services/api.js
+ * Complete API service for AI Meeting Analyzer
  */
 
 import axios from "axios";
 
-const BASE_URL = process.env.REACT_APP_API_URL || "/api";
+// ✅ Backend URL
+const BASE_URL =
+  process.env.REACT_APP_API_URL ||
+  "https://ai-meeting-analyzer-pc78.onrender.com/api";
 
+// ✅ Axios instance
 const api = axios.create({
   baseURL: BASE_URL,
-  timeout: 120_000,   // 2 min (long for file uploads)
-  headers: { "Content-Type": "application/json" },
+  timeout: 120000,
+  headers: {
+    "Content-Type": "application/json",
+  },
 });
 
-// ── Token helpers ──────────────────────────────────────────────────────────────
-const getAccessToken  = () => localStorage.getItem("access_token");
+// ─────────────────────────────────────────────────────────────────────────────
+// TOKEN HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const getAccessToken = () => localStorage.getItem("access_token");
+
 const getRefreshToken = () => localStorage.getItem("refresh_token");
+
 const setTokens = (access, refresh) => {
-  localStorage.setItem("access_token",  access);
-  if (refresh) localStorage.setItem("refresh_token", refresh);
+  localStorage.setItem("access_token", access);
+
+  if (refresh) {
+    localStorage.setItem("refresh_token", refresh);
+  }
 };
+
 export const clearTokens = () => {
   localStorage.removeItem("access_token");
   localStorage.removeItem("refresh_token");
 };
 
-// ── Request interceptor — attach Bearer token ──────────────────────────────────
-api.interceptors.request.use((config) => {
-  const token = getAccessToken();
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
+// ─────────────────────────────────────────────────────────────────────────────
+// REQUEST INTERCEPTOR
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ── Response interceptor — silent token refresh ────────────────────────────────
-let _refreshing = false;
-let _queue = [];
+api.interceptors.request.use(
+  (config) => {
+    const token = getAccessToken();
+
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESPONSE INTERCEPTOR
+// ─────────────────────────────────────────────────────────────────────────────
+
+let isRefreshing = false;
+let failedQueue = [];
+
+const processQueue = (error, token = null) => {
+  failedQueue.forEach((prom) => {
+    if (error) {
+      prom.reject(error);
+    } else {
+      prom.resolve(token);
+    }
+  });
+
+  failedQueue = [];
+};
 
 api.interceptors.response.use(
-  (res) => res,
+  (response) => response,
+
   async (error) => {
-    const original = error.config;
-    if (error.response?.status === 401 && !original._retry) {
-      if (_refreshing) {
-        return new Promise((resolve, reject) =>
-          _queue.push({ resolve, reject })
-        ).then(() => api(original));
+    const originalRequest = error.config;
+
+    if (
+      error.response?.status === 401 &&
+      !originalRequest._retry
+    ) {
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject });
+        })
+          .then((token) => {
+            originalRequest.headers.Authorization =
+              `Bearer ${token}`;
+
+            return api(originalRequest);
+          })
+          .catch((err) => Promise.reject(err));
       }
 
-      original._retry = true;
-      _refreshing     = true;
+      originalRequest._retry = true;
+      isRefreshing = true;
 
       try {
-        const refresh = getRefreshToken();
-        if (!refresh) throw new Error("No refresh token");
+        const refreshToken = getRefreshToken();
 
-        const { data } = await axios.post(`${BASE_URL}/auth/refresh`, null, {
-          headers: { Authorization: `Bearer ${refresh}` },
-        });
+        if (!refreshToken) {
+          throw new Error("No refresh token");
+        }
 
-        setTokens(data.access_token, null);
-        _queue.forEach(({ resolve }) => resolve());
-        _queue = [];
-        return api(original);
+        const response = await axios.post(
+          `${BASE_URL}/auth/refresh`,
+          {},
+          {
+            headers: {
+              Authorization: `Bearer ${refreshToken}`,
+            },
+          }
+        );
+
+        const newAccessToken = response.data.access_token;
+
+        setTokens(newAccessToken, null);
+
+        api.defaults.headers.common.Authorization =
+          `Bearer ${newAccessToken}`;
+
+        processQueue(null, newAccessToken);
+
+        originalRequest.headers.Authorization =
+          `Bearer ${newAccessToken}`;
+
+        return api(originalRequest);
       } catch (err) {
-        _queue.forEach(({ reject }) => reject(err));
-        _queue = [];
+        processQueue(err, null);
+
         clearTokens();
+
         window.location.href = "/login";
+
         return Promise.reject(err);
       } finally {
-        _refreshing = false;
+        isRefreshing = false;
       }
     }
+
     return Promise.reject(error);
   }
 );
 
-// ══════════════════════════════════════════════════════════════════════════════
-// AUTH
-// ══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTH API
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const authAPI = {
-  register: (data)   => api.post("/auth/register", data),
-  login:    (data)   => api.post("/auth/login",    data),
-  logout:   ()       => api.post("/auth/logout"),
-  getMe:    ()       => api.get("/auth/me"),
-  changePassword: (data) => api.put("/auth/password", data),
+  register: (data) =>
+    api.post("/auth/register", data),
+
+  login: (data) =>
+    api.post("/auth/login", data),
+
+  logout: () =>
+    api.post("/auth/logout"),
+
+  getMe: () =>
+    api.get("/auth/me"),
+
+  changePassword: (data) =>
+    api.put("/auth/password", data),
 };
 
-// ══════════════════════════════════════════════════════════════════════════════
-// MEETINGS
-// ══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+// MEETINGS API
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const meetingsAPI = {
   upload: (formData, onProgress) =>
     api.post("/meetings/upload", formData, {
-      headers:         { "Content-Type": "multipart/form-data" },
-      timeout:         600_000,
-      onUploadProgress: (e) =>
-        onProgress?.(Math.round((e.loaded / e.total) * 100)),
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+
+      timeout: 600000,
+
+      onUploadProgress: (progressEvent) => {
+        if (onProgress) {
+          const percentCompleted = Math.round(
+            (progressEvent.loaded * 100) /
+              progressEvent.total
+          );
+
+          onProgress(percentCompleted);
+        }
+      },
     }),
 
-  list:   (params)     => api.get("/meetings/",          { params }),
-  get:    (id)         => api.get(`/meetings/${id}`),
-  status: (id)         => api.get(`/meetings/${id}/status`),
-  update: (id, data)   => api.put(`/meetings/${id}`, data),
-  delete: (id)         => api.delete(`/meetings/${id}`),
-  stats:  ()           => api.get("/meetings/stats"),
+  list: (params) =>
+    api.get("/meetings/", { params }),
+
+  get: (id) =>
+    api.get(`/meetings/${id}`),
+
+  status: (id) =>
+    api.get(`/meetings/${id}/status`),
+
+  update: (id, data) =>
+    api.put(`/meetings/${id}`, data),
+
+  delete: (id) =>
+    api.delete(`/meetings/${id}`),
+
+  stats: () =>
+    api.get("/meetings/stats"),
 };
 
-// ══════════════════════════════════════════════════════════════════════════════
-// ANALYSIS
-// ══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+// ANALYSIS API
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const analysisAPI = {
-  get:        (id)    => api.get(`/analysis/${id}`),
-  transcript: (id)    => api.get(`/analysis/${id}/transcript`),
-  sentiment:  (id)    => api.get(`/analysis/${id}/sentiment`),
-  actions:    (id)    => api.get(`/analysis/${id}/actions`),
-  keywords:   (id)    => api.get(`/analysis/${id}/keywords`),
-  retry:      (id)    => api.post(`/analysis/${id}/retry`),
-  search:     (params)=> api.get("/analysis/search", { params }),
+  get: (id) =>
+    api.get(`/analysis/${id}`),
+
+  transcript: (id) =>
+    api.get(`/analysis/${id}/transcript`),
+
+  sentiment: (id) =>
+    api.get(`/analysis/${id}/sentiment`),
+
+  actions: (id) =>
+    api.get(`/analysis/${id}/actions`),
+
+  keywords: (id) =>
+    api.get(`/analysis/${id}/keywords`),
+
+  retry: (id) =>
+    api.post(`/analysis/${id}/retry`),
+
+  search: (params) =>
+    api.get("/analysis/search", { params }),
 };
 
-// ══════════════════════════════════════════════════════════════════════════════
-// USERS
-// ══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+// USERS API
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const usersAPI = {
-  getProfile:        ()     => api.get("/users/profile"),
-  updateProfile:     (data) => api.put("/users/profile",     data),
-  updatePreferences: (data) => api.put("/users/preferences", data),
-  deleteAccount:     (data) => api.delete("/users/account",  { data }),
+  getProfile: () =>
+    api.get("/users/profile"),
 
-  // Admin
-  adminStats:        ()     => api.get("/users/admin/stats"),
-  adminListUsers:    (p)    => api.get("/users/admin/users",        { params: p }),
-  adminToggleUser:   (id)   => api.put(`/users/admin/users/${id}/toggle`),
-  adminChangeRole:   (id,r) => api.put(`/users/admin/users/${id}/role`, { role: r }),
-  adminDeleteMeeting:(id)   => api.delete(`/users/admin/meetings/${id}`),
+  updateProfile: (data) =>
+    api.put("/users/profile", data),
+
+  updatePreferences: (data) =>
+    api.put("/users/preferences", data),
+
+  deleteAccount: (data) =>
+    api.delete("/users/account", { data }),
+
+  adminStats: () =>
+    api.get("/users/admin/stats"),
+
+  adminListUsers: (params) =>
+    api.get("/users/admin/users", {
+      params,
+    }),
+
+  adminToggleUser: (id) =>
+    api.put(`/users/admin/users/${id}/toggle`),
+
+  adminChangeRole: (id, role) =>
+    api.put(`/users/admin/users/${id}/role`, {
+      role,
+    }),
+
+  adminDeleteMeeting: (id) =>
+    api.delete(`/users/admin/meetings/${id}`),
 };
 
-// ══════════════════════════════════════════════════════════════════════════════
-// EXPORT
-// ══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPORT API
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const exportAPI = {
-  fullPDF:       (id) => api.get(`/export/${id}/pdf`,        { responseType: "blob" }),
-  transcriptPDF: (id) => api.get(`/export/${id}/transcript`, { responseType: "blob" }),
+  fullPDF: (id) =>
+    api.get(`/export/${id}/pdf`, {
+      responseType: "blob",
+    }),
+
+  transcriptPDF: (id) =>
+    api.get(`/export/${id}/transcript`, {
+      responseType: "blob",
+    }),
 };
 
-// ── Blob download helper ────────────────────────────────────────────────────────
-export function downloadBlob(data, filename) {
-  const url  = URL.createObjectURL(new Blob([data], { type: "application/pdf" }));
+// ─────────────────────────────────────────────────────────────────────────────
+// DOWNLOAD HELPER
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const downloadBlob = (data, filename) => {
+  const url = window.URL.createObjectURL(
+    new Blob([data])
+  );
+
   const link = document.createElement("a");
-  link.href  = url;
-  link.download = filename;
+
+  link.href = url;
+  link.setAttribute("download", filename);
+
+  document.body.appendChild(link);
+
   link.click();
-  URL.revokeObjectURL(url);
-}
+
+  link.remove();
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export { setTokens };
+
 export default api;
