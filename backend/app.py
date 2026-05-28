@@ -1,3 +1,4 @@
+
 """
 AI Meeting Analyzer — Flask Application Entry Point
 Initializes app, registers blueprints, configures extensions.
@@ -110,10 +111,12 @@ def create_app(config_class=Config):
     return app
 
 
-# ── Run App ───────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    app = create_app()
+# ── Create App Instance for Gunicorn ──────────────────────────────────────────
+app = create_app()
 
+
+# ── Run App Locally ───────────────────────────────────────────────────────────
+if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=int(os.getenv("PORT", 5000)),
