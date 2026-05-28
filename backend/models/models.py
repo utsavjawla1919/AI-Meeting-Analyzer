@@ -67,11 +67,25 @@ class UserModel:
         return db[UserModel.COLLECTION].find_one({"_id": ObjectId(user_id)})
 
     @staticmethod
-    def safe_dict(user: dict) -> dict:
-        """Strip password before sending to client."""
-        u = {k: v for k, v in user.items() if k != "password"}
-        u["_id"] = str(u["_id"])
-        return u
+def safe_dict(user: dict) -> dict:
+    """Convert Mongo user document into JSON-safe dict."""
+
+    u = {k: v for k, v in user.items() if k != "password"}
+
+    # Convert ObjectId
+    u["_id"] = str(u["_id"])
+
+    # Convert datetime objects
+    if u.get("created_at"):
+        u["created_at"] = u["created_at"].isoformat()
+
+    if u.get("updated_at"):
+        u["updated_at"] = u["updated_at"].isoformat()
+
+    if u.get("last_login"):
+        u["last_login"] = u["last_login"].isoformat()
+
+    return u
 
     @staticmethod
     def update_last_login(db, user_id):
