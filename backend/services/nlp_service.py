@@ -61,15 +61,26 @@ def _get_spacy():
 
 def _ensure_nltk():
     import nltk
+    import ssl
+    try:
+        _create_unverified_https_context = ssl._create_unverified_context
+    except AttributeError:
+        pass
+    else:
+        ssl._create_default_https_context = _create_unverified_https_context
+
     for pkg, path in [
-        ("punkt_tab",            "tokenizers/punkt_tab"),
-        ("stopwords",            "corpora/stopwords"),
-        ("averaged_perceptron_tagger", "taggers/averaged_perceptron_tagger"),
-        ("vader_lexicon",        "sentiment/vader_lexicon"),
+        ("punkt",                        "tokenizers/punkt"),
+        ("punkt_tab",                    "tokenizers/punkt_tab"),
+        ("stopwords",                    "corpora/stopwords"),
+        ("averaged_perceptron_tagger",   "taggers/averaged_perceptron_tagger"),
+        ("averaged_perceptron_tagger_eng", "taggers/averaged_perceptron_tagger_eng"),
+        ("vader_lexicon",                "sentiment/vader_lexicon"),
+        ("wordnet",                      "corpora/wordnet"),
     ]:
         try:
             nltk.data.find(path)
-        except LookupError:
+        except (LookupError, OSError):
             nltk.download(pkg, quiet=True)
 
 
